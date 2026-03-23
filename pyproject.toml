@@ -95,3 +95,6 @@ fprime_test_api = "fprime_gds.common.testing_fw.pytest_integration"
 markers =[
   "gds_cli"
 ]
+
+[project.entry-points.fprime_gds]
+persistent_logger = "fprime_gds.common.logger.persistent_logger:PersistentLogger"
