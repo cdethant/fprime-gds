@@ -6,7 +6,7 @@ from fprime_gds.common.handlers import DataHandlerPlugin
 from fprime_gds.plugin.definitions import gds_plugin
 
 @gds_plugin(DataHandlerPlugin)
-class PersistentLogger():
+class PersistentLogger(DataHandlerPlugin):
     """
     Writes decoded F Prime telemetry to a local SQLite database. 
     """
@@ -24,7 +24,7 @@ class PersistentLogger():
 
         return ["FW_PACKET_TELEM"]
 
-    def data_callback(self, data, source):
+    def data_callback(self, data, source=None):
         try:
             self._queue.put_nowait((
                 data.get_time().to_readable(),
@@ -132,6 +132,10 @@ if __name__ == "__main__":
     import os, time
  
     DB = "smoke_test.db"
+
+    # Clear old entries for testing
+    if os.path.exists(DB):
+        os.remove(DB)
  
     # Instantiate directly, bypassing the @gds_plugin decorator
     # (decorator is a no-op at runtime; it only registers with pluggy)
@@ -157,4 +161,3 @@ if __name__ == "__main__":
  
     assert len(rows) == 5, f"Expected 5 rows, got {len(rows)}"
     print("\ntest PASSED.")
-    os.remove(DB)
