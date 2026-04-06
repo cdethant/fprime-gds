@@ -262,7 +262,7 @@ class GdsStandardApp(GdsApp):
         module = self.__class__.__module__
 
         composite_parser = CompositeParser(
-            [self.get_cli_parser(), StandardPipelineParser]
+            [StandardPipelineParser, PluginArgumentParser, self.get_cli_parser()] + self.get_additional_cli_parsers()
         )
         if namespace is None:
             namespace, _, _ = ParserBase.parse_known_args([composite_parser], client=True)
@@ -285,7 +285,7 @@ class GdsStandardApp(GdsApp):
             plugin_name = getattr(cls, "get_name", lambda: cls.__name__)()
             plugin_composite = CompositeParser([cls.get_cli_parser()] + cls.get_additional_cli_parsers())
 
-            parsed_arguments, _ = ParserBase.parse_args(
+            parsed_arguments, _, *_ = ParserBase.parse_known_args(
                 # StandardPipelineParser first as it loads the FSW dictionary into global config
                 [ StandardPipelineParser, PluginArgumentParser, plugin_composite],
                 f"{plugin_name}: a standard app plugin",
