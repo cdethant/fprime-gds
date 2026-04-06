@@ -53,25 +53,33 @@ class PersistentLogger(DataHandlerPlugin):
         }
 
     def get_handled_descriptors(self) -> List[str]:
-        """Subscribe to decoded channel (telemetry) data."""
-
-        # TODO: FW_PACKET_LOG = Events
-        return ["FW_PACKET_TELEM"]
+        """Subscribe to decoded channel (telemetry) and event data."""
+        return ["FW_PACKET_TELEM", "FW_PACKET_LOG"]
 
     def data_callback(self, data, sender=None) -> None:
-        """Enqueue a telemetry row for asynchronous persistence.
+        """Enqueue a telemetry or event row for asynchronous persistence.
 
         Args:
-            data: A decoded ``ChData`` object produced by the channel decoder.
+            data: A decoded ``ChData`` or ``EventData`` object.
             sender: Optional sender identifier (unused).
         """
         try:
-            self._queue.put_nowait((
-                self._session_id,
-                data.get_time().to_readable(),
-                data.get_template().get_full_name(),
-                str(data.get_val_obj().val),
-            ))
+            if hasattr(data, 'get_val_obj'):  # Telemetry
+                self._queue.put_nowait((
+                    "telemetry",
+                    self._session_id,
+                    data.get_time().to_readable(),
+                    data.get_template().get_full_name(),
+                    str(data.get_val_obj().val),
+                ))
+            elif hasattr(data, 'get_display_text'):  # Event
+                self._queue.put_nowait((
+                    "events",
+                    self._session_id,
+                    data.get_time().to_readable(),
+                    data.get_template().get_full_name(),
+                    str(data.get_display_text()),
+                ))
         except Exception as exc:
             LOGGER.warning("data_callback error (skipping): %s", exc)
 
@@ -124,6 +132,15 @@ class PersistentLogger(DataHandlerPlugin):
                     value        TEXT    NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT    NOT NULL,
+                    timestamp    TEXT    NOT NULL,
+                    event_name   TEXT    NOT NULL,
+                    event_text   TEXT    NOT NULL
+                )
+            """)
             # Check if session_id column exists (migration for existing DBs)
             cursor = conn.execute("PRAGMA table_info(telemetry)")
             columns = [info[1] for info in cursor.fetchall()]
@@ -143,38 +160,62 @@ class PersistentLogger(DataHandlerPlugin):
         """
         conn = sqlite3.connect(self._db_path)
         try:
-            batch: List[Tuple[str, str, str, str]] = []
+            batch_telem = []
+            batch_events = []
             while self._running or not self._queue.empty():
                 try:
                     row = self._queue.get(timeout=_POLL_TIMEOUT)
-                    batch.append(row)
+                    if row[0] == "telemetry":
+                        batch_telem.append(row[1:])
+                    elif row[0] == "events":
+                        batch_events.append(row[1:])
                 except queue.Empty:
                     pass
 
-                if len(batch) >= _BATCH_SIZE or (
-                    batch and (not self._running or self._queue.empty())
+                total_len = len(batch_telem) + len(batch_events)
+                if total_len >= _BATCH_SIZE or (
+                    total_len > 0 and (not self._running or self._queue.empty())
                 ):
-                    self._commit_batch(conn, batch)
-                    batch = []
+                    if batch_telem:
+                        self._commit_batch(conn, "telemetry", batch_telem)
+                        for _ in range(len(batch_telem)):
+                            self._queue.task_done()
+                        batch_telem = []
+                    if batch_events:
+                        self._commit_batch(conn, "events", batch_events)
+                        for _ in range(len(batch_events)):
+                            self._queue.task_done()
+                        batch_events = []
         finally:
             # Flush any remaining rows on unexpected exit
-            if batch:
-                self._commit_batch(conn, batch)
-                for _ in range(len(batch)):
+            if batch_telem:
+                self._commit_batch(conn, "telemetry", batch_telem)
+                for _ in range(len(batch_telem)):
+                    self._queue.task_done()
+            if batch_events:
+                self._commit_batch(conn, "events", batch_events)
+                for _ in range(len(batch_events)):
                     self._queue.task_done()
             conn.close()
 
     @staticmethod
     def _commit_batch(
-        conn: sqlite3.Connection, batch: List[Tuple[str, str, str, str]]
+        conn: sqlite3.Connection, table: str, batch: list
     ) -> None:
         """Write a batch of rows in a single transaction."""
         try:
-            conn.executemany(
-                "INSERT INTO telemetry (session_id, timestamp, channel_name, value)"
-                " VALUES (?, ?, ?, ?)",
-                batch,
-            )
+            if table == "telemetry":
+                conn.executemany(
+                    "INSERT INTO telemetry (session_id, timestamp, channel_name, value)"
+                    " VALUES (?, ?, ?, ?)",
+                    batch,
+                )
+            elif table == "events":
+                conn.executemany(
+                    "INSERT INTO events (session_id, timestamp, event_name, event_text)"
+                    " VALUES (?, ?, ?, ?)",
+                    batch,
+                )
             conn.commit()
         except Exception as exc:
-            LOGGER.error("batch write error (%d rows lost): %s", len(batch), exc)
+            LOGGER.error("batch write error (%d rows lost) for %s: %s", len(batch), table, exc)
