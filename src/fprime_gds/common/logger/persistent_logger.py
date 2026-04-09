@@ -46,9 +46,11 @@ class PersistentLogger(DataHandlerPlugin):
             ("--persistent-db",): {
                 "dest": "persistent_db",
                 "type": str,
-                "default": "./db/fprime_telem.db",
-                "help": "Path to the SQLite database for persistent telemetry logging "
-                        "(default: ./db/fprime_telem.db)",
+                "nargs": "?",
+                "const": "./db/fprime_telem.db",
+                "default": None,
+                "help": "Enable persistent telemetry logging, optionally specifying the SQLite database path "
+                        "(default path: ./db/fprime_telem.db)",
             },
         }
 
@@ -63,6 +65,9 @@ class PersistentLogger(DataHandlerPlugin):
             data: A decoded ``ChData`` or ``EventData`` object.
             sender: Optional sender identifier (unused).
         """
+        if getattr(self, '_running', False) is False:
+            return
+
         try:
             if hasattr(data, 'get_val_obj'):  # Telemetry
                 self._queue.put_nowait((
@@ -83,13 +88,17 @@ class PersistentLogger(DataHandlerPlugin):
         except Exception as exc:
             LOGGER.warning("data_callback error (skipping): %s", exc)
 
-    # TODO: instead of creating a new db each session, add new session data to a single db table, with a session id column. 
-    def __init__(self, persistent_db: str = "fprime_telem.db", **kwargs) -> None:
+    def __init__(self, persistent_db: str = None, **kwargs) -> None:
         super().__init__(**kwargs)
+        self._running: bool = False
+        if not persistent_db:
+            LOGGER.info("Persistent logger disabled. Use --persistent-db to enable.")
+            return
+
         self._db_path: str = persistent_db
         self._session_id: str = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
         self._queue: queue.Queue = queue.Queue()
-        self._running: bool = True
+        self._running = True
 
         # Create the database directory if it does not exist
         db_dir = os.path.dirname(self._db_path)
@@ -112,7 +121,7 @@ class PersistentLogger(DataHandlerPlugin):
         Called during GDS shutdown so the last packets are not lost.
         Safe to call more than once — subsequent calls are no-ops.
         """
-        if not self._running:
+        if getattr(self, '_running', False) is False:
             return
         self._running = False
         self._queue.join()

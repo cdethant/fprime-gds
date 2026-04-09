@@ -275,6 +275,7 @@ class IpHandler(abc.ABC):
                     self.connected = IpHandler.CONNECTING
                     self.socket = socket.socket(socket.AF_INET, self.type)
                     if self.server:
+                        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                         self.socket.bind((self.address, self.port))
                     else:
                         self.socket.connect((self.address, self.port))
@@ -417,6 +418,8 @@ class TcpHandler(IpHandler):
         """
         Open up this particular adapter. This adapter
         """
+        if self.socket is None:
+            return
         # When a server, must accept and spawn new socket
         if self.server:
             self.socket.listen(IpHandler.MAX_CLIENT_BACKLOG)
@@ -440,10 +443,13 @@ class TcpHandler(IpHandler):
         Specific read implementation for the TCP handler. This involves reading from the spawned client socket, not the
         primary socket.
         """
+        if self.client is None:
+            return b""
         data = self.client.recv(IpAdapter.MAXIMUM_DATA_SIZE)
         if not data:
             self.close_impl()
-            self.open_impl()
+            if self.running:
+                self.open_impl()
         return data
 
     def write_impl(self, message):
