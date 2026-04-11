@@ -1,7 +1,7 @@
 """
 persistent_logger.py:
 
-A DataHandlerPlugin that persists decoded F Prime channel telemetry to a local
+A DataHandlerPlugin that persists F Prime channel telemetry and events to a local
 SQLite database.  Rows are buffered in a thread-safe queue and batch-committed
 by a single background worker thread (SQLite connections must stay on one thread).
 
@@ -28,9 +28,9 @@ _POLL_TIMEOUT = 0.5  # seconds the worker waits for new items
 
 @gds_plugin(DataHandlerPlugin)
 class PersistentLogger(DataHandlerPlugin):
-    """Writes decoded F Prime channel telemetry to a local SQLite database.
+    """Writes decoded F Prime channel telemetry and events to a local SQLite database.
 
-    The plugin subscribes to ``FW_PACKET_TELEM`` and stores each channel reading
+    The plugin subscribes to ``FW_PACKET_TELEM`` and ``FW_PACKET_LOG`` and stores each channel reading
     as *(timestamp, channel_name, value)*.  Writes are performed asynchronously
     from a daemon thread to avoid blocking the GDS data pipeline.
     """
@@ -47,10 +47,10 @@ class PersistentLogger(DataHandlerPlugin):
                 "dest": "persistent_db",
                 "type": str,
                 "nargs": "?",
-                "const": "./db/fprime_telem.db",
+                "const": "./db/session_logs.db",
                 "default": None,
-                "help": "Enable persistent telemetry logging, optionally specifying the SQLite database path "
-                        "(default path: ./db/fprime_telem.db)",
+                "help": "Enable persistent logging to a database, optionally specifying the database path "
+                        "(default path: ./db/session_logs.db)",
             },
         }
 
@@ -129,7 +129,7 @@ class PersistentLogger(DataHandlerPlugin):
         LOGGER.info("stopped.")
 
     def _init_schema(self) -> None:
-        """Create the ``telemetry`` table if it does not already exist."""
+        """Create the ``telemetry`` and ``events`` tables if they do not already exist."""
         conn = sqlite3.connect(self._db_path)
         try:
             conn.execute("""
